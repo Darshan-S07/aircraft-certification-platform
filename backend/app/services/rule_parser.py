@@ -1,192 +1,218 @@
 import re
-import json
-from typing import List, Dict
+import fitz  # PyMuPDF
 
 
 class RuleParser:
-
-    # ================= PDF TEXT EXTRACTION =================
-    def extract_text_from_pdf(self, file_path: str) -> str:
-        from PyPDF2 import PdfReader
-
-        reader = PdfReader(file_path)
-        text = ""
-
-        for page in reader.pages:
-            text += page.extract_text() + "\n"
-
-        return text
-
-    # ================= REMOVE TOC =================
-    def remove_toc(self, text: str) -> str:
-        # Simple cleanup — you can improve later
-        return text
-
-    # ================= MAIN PARSER =================
-    def parse(self, text: str) -> List[Dict]:
-
-        rules = []
-        current = None
-
-        lines = text.split("\n")
-
-        for line in lines:
-            line = line.strip()
-
-            # 🔹 Detect CS rule
-            cs_match = re.match(r'^CS\s*23\.(\d+)', line)
-
-            # 🔹 Detect AMC
-            amc_match = re.match(r'^(AMC\d*)\s*23\.(\d+)', line)
-
-            # 🔹 Detect GM
-            gm_match = re.match(r'^(GM\d*)\s*23\.(\d+)', line)
-
-            if cs_match:
-                if current:
-                    rules.append(current)
-
-                current = {
-                    "rule_number": cs_match.group(1),
-                    "type": "CS",
-                    "title": line,
-                    "text": "",
-                    "references": [],
-                    "subpart": None
-                }
-
-            elif amc_match:
-                if current:
-                    rules.append(current)
-
-                current = {
-                    "rule_number": amc_match.group(2),
-                    "type": amc_match.group(1),
-                    "title": line,
-                    "text": "",
-                    "references": [],
-                    "subpart": None
-                }
-
-            elif gm_match:
-                if current:
-                    rules.append(current)
-
-                current = {
-                    "rule_number": gm_match.group(2),
-                    "type": gm_match.group(1),
-                    "title": line,
-                    "text": "",
-                    "references": [],
-                    "subpart": None
-                }
-
-            elif current:
-                current["text"] += line + "\n"
-
-        if current:
-            rules.append(current)
-
-        # 🔥 AFTER PARSING → EXTRACT REFERENCES FOR AMC ONLY
-        for rule in rules:
-            if rule["type"].startswith("AMC"):
-                rule["references"] = self.extract_references(rule["text"])
-
-        return rules
-
-    # ================= 🔥 STEP 1: EXTRACT REFERENCES =================
-    def extract_references(self, text: str) -> List[str]:
+    def extract_references(self, text):
+        import re
 
         refs = []
-        lines = text.split("\n")
 
-        for line in lines:
-            line = line.strip()
+        # Match:
+        # 23.783, 23.787
+        cs_refs = re.findall(r'23\.(\d+)', text)
 
-            match = re.match(r'(23\.\d+|VLA\.\d+)', line)
-            if not match:
-                continue
+        # Match:
+        # VLA.783, VLA.787
+        vla_refs = re.findall(r'VLA\.(\d+)', text)
 
-            base = match.group(1)
-
-            parts = re.findall(r'\([a-z0-9]+\)', line)
-
-            if parts:
-                current = ""
-                for p in parts:
-                    current += p
-                    refs.append(base + current)
-            else:
-                refs.append(base)
+        # Convert to uniform format
+        refs.extend([f"23.{r}" for r in cs_refs])
+        refs.extend([f"VLA.{r}" for r in vla_refs])
 
         return list(set(refs))
+    def extract_sections(self, text):
+        sections = {}
 
+        matches = re.findall(
+            r'\(([a-z])\)\s*(.*?)(?=\([a-z]\)|$)',
+            text,
+            re.S
+        )
 
-# ================= 🔥 STEP 2: SPLIT REFERENCE =================
-def split_reference(ref: str):
-    match = re.match(r'(23\.\d+|VLA\.\d+)', ref)
-    if not match:
-        return None, None
+        for label, content in matches:
+            sections[label] = self.clean_text(content)
 
-    base = match.group(1)
-    subsection = ref.replace(base, "")
+        return sections
+    def clean_text(self, text):
+        text = re.sub(r'http\S+', '', text)
+        text = re.sub(r'[ \t]+', ' ', text)
+        text = re.sub(r'\n+', '\n', text)
+        return text.strip()
+    def remove_toc(self, text):
 
-    return base, subsection
+        lines = text.split("\n")
+        clean_lines = []
+        toc_detected = True
 
+        for line in lines:
 
-# ================= 🔥 STEP 3: EXTRACT SUBSECTION =================
-def extract_subsection(text: str, subsection: str):
+            # TOC pattern → dots + numbers
+            if re.search(r'\.{3,}\s*\d+', line):
+                continue
 
-    if not text or not text.startswith("{"):
-        return text
+            # Stop skipping once real rule starts
+            if re.search(r'CS\s+23\.\d+\s*\(', line):
+                toc_detected = False
 
-    data = json.loads(text)
+            if not toc_detected:
+                clean_lines.append(line)
 
-    keys = re.findall(r'\(([a-z0-9]+)\)', subsection)
+        return "\n".join(clean_lines)
+    def extract_text_from_pdf(self, pdf_path):
+        import fitz
 
-    current = data
+        doc = fitz.open(pdf_path)
+        full_text = ""
 
-    try:
-        for k in keys:
-            current = current[k]
-        return current
-    except:
-        return None
+        for page in doc:
+            blocks = page.get_text("blocks")  # 🔥 structured extraction
 
+            for block in blocks:
+                text = block[4]
 
-# ================= 🔥 STEP 4: FETCH RULE WITH SUBSECTION =================
-def fetch_reference_rule(ref: str):
+                # Skip tiny garbage blocks
+                if len(text.strip()) < 5:
+                    continue
 
-    import sqlite3
+                full_text += text + "\n"
 
-    conn = sqlite3.connect("certification.db")
-    cursor = conn.cursor()
+        return full_text
 
-    base, subsection = split_reference(ref)
+    def parse(self, text, regulation_id=1):
+        current_subpart = "General"
+        import re
 
-    if not base:
-        return None
+        # ---------------- CLEANING ----------------
+        text = re.sub(r'http\S+', '', text)
 
-    rule_number = base.replace("23.", "").replace("VLA.", "")
+        # Normalize line breaks
+        text = text.replace("\r", "\n")
 
-    cursor.execute("""
-        SELECT title, text FROM rules
-        WHERE rule_number = ? AND type = 'CS'
-    """, (rule_number,))
+        lines = text.split("\n")
 
-    row = cursor.fetchone()
-    conn.close()
+        rules = []
 
-    if not row:
-        return None
+        # ✅ Strict rule pattern
+        rule_pattern = re.compile(r'^(CS|AMC\d+|GM\d+)\s+23\.(\d+)\s+(.*)')
 
-    title, text = row
+        current_rule = None
+        current_text = []
 
-    # 🔥 Extract subsection if exists
-    if subsection:
-        extracted = extract_subsection(text, subsection)
+        for line in lines:
 
-        if extracted:
-            return title + f" {subsection}", extracted
+            line = line.strip()
 
-    return title, text
+            # ---------------- SKIP JUNK ----------------
+            if not line or len(line) < 3:
+                continue
+
+            # ❌ Table of contents (dots + page numbers)
+            if re.search(r'\.{3,}', line):
+                continue
+
+            # ❌ Headers / footers
+            if any(x in line for x in [
+                "AMC & GM to CS-23",
+                "CS-23 — Amendment",
+                "Table of Contents",
+                "ED Decision",
+                "Annex to",
+                "Preamble"
+            ]):
+                continue
+
+            # ❌ Subparts / sections
+            if "SUBPART" in line:
+                # ✅ Detect SUBPART
+                subpart_match = re.match(r'SUBPART\s+([A-Z])\s*[-–]?\s*(.*)', line)
+
+                if subpart_match:
+                    current_subpart = f"Subpart {subpart_match.group(1)}"
+                    continue
+
+                # Skip appendix
+            if "Appendix" in line:
+                continue
+
+            # ❌ Amendment history lines
+            if re.search(r'Created|Deleted|Amended|NPA', line):
+                continue
+
+            # ❌ Range rules (fake)
+            if re.search(r'CS\s+23\.\d+\s+through\s+CS\s+23\.\d+', line):
+                continue
+
+            # ---------------- RULE DETECTION ----------------
+            match = rule_pattern.match(line)
+
+            if match:
+
+                # Save previous rule
+                if current_rule and current_text:
+                    full_text = "\n".join(current_text)
+
+                    # 🔥 NEW: extract subsections
+                    #full_text = "\n".join(current_text)
+
+                    # 🔥 EXTRACT REFERENCES
+                    references = self.extract_references(full_text)
+
+                    if current_rule["type"] == "CS":
+                        sections = self.extract_sections(full_text)
+
+                        if sections:
+                            current_rule["text"] = sections
+                        else:
+                            current_rule["text"] = full_text.strip()
+
+                    else:
+                        # ✅ AMC & GM RAW TEXT (NO PARSING)
+                        current_rule["text"] = full_text.strip()
+
+                    # 🔥 STORE REFERENCES
+                    current_rule["references"] = references
+
+                    rules.append(current_rule)
+
+                rule_type = match.group(1)
+                rule_number = match.group(2)
+
+                # ✅ Clean title (remove trailing dots/pages)
+                title = re.sub(r'\.{3,}.*', '', match.group(3)).strip()
+
+                current_rule = {
+                    "rule_number": rule_number,
+                    "type": rule_type,
+                    "title": self.clean_text(f"{rule_type} 23.{rule_number} {title}"),
+                    "text": "",
+                    "subpart": current_subpart,   # ✅ ADD THIS
+                    "regulation_id": regulation_id
+                }
+
+                current_text = []
+                continue
+
+            # ---------------- TEXT ACCUMULATION ----------------
+            if current_rule:
+                current_text.append(line)
+
+        # Save last rule
+        if current_rule and current_text:
+            full_text = "\n".join(current_text)
+
+            # 🔥 NEW: extract subsections
+            if current_rule["type"] == "CS":
+                sections = self.extract_sections(full_text)
+
+                if sections:
+                    current_rule["text"] = sections
+                else:
+                    current_rule["text"] = full_text.strip()
+            else:
+                # ✅ AMC & GM should stay RAW TEXT
+                current_rule["text"] = full_text.strip()
+
+            rules.append(current_rule)
+
+        return rules
