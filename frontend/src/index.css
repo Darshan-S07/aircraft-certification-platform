@@ -1,0 +1,33 @@
+body {
+  font-family: Arial;
+  background: #0f172a;
+  color: white;
+}
+
+.app {
+  padding: 20px;
+}
+
+.dropdown {
+  margin: 10px 0;
+}
+
+select {
+  padding: 8px;
+  margin-left: 10px;
+}
+
+.viewer {
+  margin-top: 20px;
+  background: #1e293b;
+  padding: 20px;
+  border-radius: 10px;
+}
+
+button {
+  padding: 10px 15px;
+  margin-top: 10px;
+  background: #22c55e;
+  border: none;
+  cursor: pointer;
+}

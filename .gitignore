@@ -1,0 +1,63 @@
+# -----------------------
+# Node.js / Frontend
+# -----------------------
+node_modules/
+dist/
+build/
+.cache/
+.next/
+out/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# -----------------------
+# Backend (common)
+# -----------------------
+# Python
+__pycache__/
+*.pyc
+venv/
+.env/
+
+# Java
+target/
+*.class
+
+# .NET
+bin/
+obj/
+
+# -----------------------
+# Misc
+# -----------------------
+coverage/
+tmp/
+temp/
+
+# Package lock files (optional — keep if needed)
+# package-lock.json
+# yarn.lock
+
+# -----------------------
+# Git
+# -----------------------
