@@ -22,7 +22,7 @@ yarn-error.log*
 
 # OS files
 .DS_Store
-Thumbs.db
+*.db
 
 # IDE / Editor
 .vscode/
@@ -61,3 +61,5 @@ temp/
 # -----------------------
 # Git
 # -----------------------
+*.pdf
+uploaded_pdfs/
