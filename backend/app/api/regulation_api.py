@@ -161,40 +161,63 @@ def get_rules_list(subpart: str = None):
     conn.close()
 
     return [
-        {"label": f"CS 23.{r[0]} - {r[1]}", "value": r[0]}
+        {"label": f"CS {r[0]} - {r[1]}", "value": r[0]}
         for r in rows
     ]
 
+def filter_subsections(text, subs):
+    if not text.startswith("{"):
+        return text
 
+    data = json.loads(text)
+
+    if not subs:
+        return data
+
+    filtered = {}
+
+    for sub in subs:
+        key = sub.replace("(", "").replace(")", "")
+        if key in data:
+            filtered[key] = data[key]
+
+    return filtered
 # ================= FETCH REFERENCE =================
 def fetch_reference_rule(ref):
+    import sqlite3
+
     conn = sqlite3.connect("certification.db")
     cursor = conn.cursor()
 
+    ref = ref.strip()
+
+    # Handle CS reference
     if ref.startswith("23."):
         ref_num = ref.replace("23.", "")
-        cursor.execute("""
-            SELECT title, text FROM rules
-            WHERE rule_number = ? AND type = 'CS'
-        """, (ref_num,))
 
     elif ref.startswith("VLA."):
         ref_num = ref.replace("VLA.", "")
-        cursor.execute("""
-            SELECT title, text FROM rules
-            WHERE rule_number = ? AND type = 'CS'
-        """, (ref_num,))
+
     else:
         return None
 
+    cursor.execute("""
+        SELECT title, text FROM rules
+        WHERE rule_number = ? AND type = 'CS'
+    """, (ref_num,))
+
     row = cursor.fetchone()
     conn.close()
-    return row
 
+    if not row:
+        print(f"⚠️ Reference NOT FOUND in DB: {ref}")  # DEBUG
+        return None
+
+    return row
 
 # ================= EXPORT PDF =================
 @router.get("/export/{rule_number}")
-def export_rule(rule_number: str):
+def export_rule(rule_number: str, amc: int = None):
 
     rule_number = rule_number.replace("23.", "")
 
@@ -269,24 +292,51 @@ def export_rule(rule_number: str):
     # AMC
     if amc_list:
         elements.append(Paragraph("<b>AMC</b>", styles["Heading2"]))
+        printed_refs=set()
+        for index, amc_item in enumerate(amc_list, start=1):
 
-        for amc in amc_list:
-            elements.append(Paragraph(amc["title"], styles["Heading3"]))
-            elements.extend(render(amc["text"]))
+            if amc is not None and index != amc:
+                continue
+            elements.append(Paragraph(amc_item["title"], styles["Heading3"]))
+            elements.extend(render(amc_item["text"]))
 
-            refs = list(set(amc["references"]))
-            from app.services.rule_parser import fetch_reference_rule
+            unique_refs = {}
+
+            for ref in amc_item["references"]:
+                key = (ref["rule"], tuple(ref["subs"]))  # make it hashable
+                unique_refs[key] = ref
+
+            refs = list(unique_refs.values())
+            print("References:",refs)
+            from app.services.rule_parser import RuleParser
             for ref in refs:
-                ref_rule = fetch_reference_rule(ref)
+                ref_rule = ref["rule"]
+                ref_subs = ref["subs"]
 
-                if ref_rule:
+                ref_data = fetch_reference_rule(ref_rule)
+
+                if ref_rule in printed_refs:
+                    continue
+                printed_refs.add(ref_rule)
+
+                if ref_data:
+                    ref_title, ref_text = ref_data
+
+                    from app.services.rule_parser import RuleParser
+
+                    filtered_text = RuleParser().filter_subsections(ref_text, ref_subs)
+
                     elements.append(Spacer(1, 10))
                     elements.append(
-                        Paragraph(f"<b>Referenced Rule: {ref}</b>", styles["Heading4"])
+                        Paragraph(f"<b>Referenced Rule: {ref_rule}</b>", styles["Heading4"])
                     )
-                    elements.append(Paragraph(ref_rule[0], styles["Heading3"]))
-                    elements.extend(render(ref_rule[1]))
+                    elements.append(Paragraph(ref_title, styles["Heading3"]))
 
+                    # IMPORTANT
+                    if isinstance(filtered_text, dict):
+                        elements.extend(render(json.dumps(filtered_text)))
+                    else:
+                        elements.extend(render(filtered_text))
             elements.append(Spacer(1, 15))
 
     # GM
