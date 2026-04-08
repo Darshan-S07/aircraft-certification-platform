@@ -7,7 +7,7 @@ from app.models.rule import Rule
 from app.services.rule_parser import RuleParser
 import sqlite3
 import json
-
+from app.services.pdf_extractor import PDFExtractor
 from fastapi.responses import FileResponse
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
@@ -53,10 +53,10 @@ async def upload_regulation(
         db.commit()
         db.refresh(regulation)
 
-    parser = RuleParser()
-    text = parser.extract_text_from_pdf(file_path)
-    text = parser.remove_toc(text)
+    extractor = PDFExtractor()
+    text = extractor.extract_text(file_path)
 
+    parser = RuleParser()
     rules_data = parser.parse(text)
 
     inserted_rules = set()
@@ -92,7 +92,10 @@ async def upload_regulation(
         db.add(rule_obj)
 
     db.commit()
+    print("🔥 TOTAL CS:", len(parser.cs_master_rules))
 
+    for k in list(parser.cs_master_rules.keys())[:10]:
+        print("CS:", k)
     return {
         "message": "Uploaded successfully",
         "rules_count": len(rules_data)
@@ -302,9 +305,32 @@ def export_rule(rule_number: str, amc: int = None):
 
             unique_refs = {}
 
-            for ref in amc_item["references"]:
-                key = (ref["rule"], tuple(ref["subs"]))  # make it hashable
-                unique_refs[key] = ref
+            for ref in amc_item.get("references", []):
+
+                # ✅ Case 1: ref is already structured dict
+                if isinstance(ref, dict):
+                    rule = ref.get("rule")
+                    subs = tuple(ref.get("subs", []))
+
+                # ✅ Case 2: ref is string → convert to structured
+                elif isinstance(ref, str):
+                    import re
+                    match = re.match(r'(23\.\d+)((?:\([a-z0-9]+\))*)', ref)
+
+                    if match:
+                        rule = match.group(1)
+                        subs = tuple(re.findall(r'\(([a-z0-9]+)\)', match.group(2)))
+                    else:
+                        continue
+
+                else:
+                    continue
+
+                key = (rule, subs)
+                unique_refs[key] = {
+                    "rule": rule,
+                    "subs": list(subs)
+                }
 
             refs = list(unique_refs.values())
             print("References:",refs)

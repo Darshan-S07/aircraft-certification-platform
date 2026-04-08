@@ -3,6 +3,65 @@ import fitz  # PyMuPDF
 
 
 class RuleParser:
+    def __init__(self):
+        self.cs_master_rules = {}
+    def split_into_rule_blocks(self, text):
+        import re
+
+        # 🔥 Find ALL rule start positions
+        pattern = r'(CS|AMC\d+|GM\d+)\s+23\.\d{2,4}'
+
+        matches = list(re.finditer(pattern, text))
+
+        blocks = []
+
+        for i in range(len(matches)):
+            start = matches[i].start()
+
+            if i + 1 < len(matches):
+                end = matches[i + 1].start()
+            else:
+                end = len(text)
+
+            block = text[start:end].strip()
+            blocks.append(block)
+
+        return blocks
+    def remove_table_noise(self, text):
+        import re
+
+        lines = text.split("\n")
+        clean = []
+
+        for line in lines:
+            if re.search(r'\d+\s+to\s+\d+', line):
+                continue
+            if re.search(r'\.{3,}', line):
+                continue
+            if re.search(r'\(\d+\)', line) and len(line.split()) < 5:
+                continue
+
+            clean.append(line)
+
+        return "\n".join(clean)
+    def is_rule_header(self, line):
+        import re
+
+        return bool(re.match(r'^(CS|AMC\d+|GM\d+)\s+23\.\d+\s+[A-Za-z]',line.strip()))
+    def normalize_text(self, text):
+        import re
+
+        # ✅ Join broken lines inside sentences
+        text = re.sub(r'\n(?=[a-z])', ' ', text)
+
+        # ✅ Fix cases like:
+        # (a)\nSome text → (a) Some text
+        text = re.sub(r'\(([a-z])\)\s*\n\s*', r'(\1) ', text)
+
+        # ✅ Remove extra newlines
+        text = re.sub(r'\n+', '\n', text)
+
+        return text.strip()
     def filter_subsections(self, text, subs):
         import json
         import re
@@ -59,40 +118,40 @@ class RuleParser:
             rules.append(current.strip())
 
         return rules
-    def extract_references(self,text):
+    def extract_references(self, text):
         import re
-
-        pattern = r'23\.(\d+)((?:\([a-z0-9]+\))*)'
-        matches = re.findall(pattern, text)
 
         refs = []
 
-        for rule, subs in matches:
-            subs_list = re.findall(r'\(([a-z0-9]+)\)', subs)
-            refs.append({
-                "rule": f"23.{rule}",
-                "subs": subs_list
-            })
+        pattern = r'(23\.\d+)((?:\([a-z0-9]+\))*)'
+        matches = re.findall(pattern, text)
 
-        return refs
+        for base, subs in matches:
+            sub_parts = re.findall(r'\(([a-z0-9]+)\)', subs)
+
+            if sub_parts:
+                for sub in sub_parts:
+                    refs.append(f"{base}({sub})")
+            else:
+                refs.append(base)
+
+        return list(set(refs))
     def extract_sections(self, text):
         import re
 
-        sections = {}
+        pattern = r'\(([a-z])\)\s*(.*?)((?=\([a-z]\))|$)'
+        matches = re.findall(pattern, text, re.DOTALL)
 
-        # Match (a), (b), (c)(1), (c)(2)
-        pattern = r'\(([a-z])\)((?:\(\d+\))?)\s*(.*?)(?=\([a-z]\)|$)'
+        clauses = {}
 
-        matches = re.findall(pattern, text, re.S)
+        for key, content, _ in matches:
+            clauses[key] = content.strip()
 
-        for main, sub, content in matches:
-            key = main + sub.replace("(", "").replace(")", "")
-            sections[key] = self.clean_text(content)
-
-        return sections
+        return clauses
     def clean_text(self,text):
         import re
-
+        text = re.sub(r'Amendment\s+\d+\s+CS-23\s+BOOK\s+\d+', '', text)
+        text = re.sub(r'\b(or|and)\b\s*$', '', text)
         lines = text.split("\n")
         clean_lines = []
 
@@ -151,195 +210,132 @@ class RuleParser:
 
         return "\n".join(clean_lines)
     def extract_text_from_pdf(self, pdf_path):
-        import fitz
+        # import fitz
 
-        doc = fitz.open(pdf_path)
-        full_text = ""
+        # doc = fitz.open(pdf_path)
+        # full_text = ""
 
-        for page in doc:
-            blocks = page.get_text("blocks")
+        # for page in doc:
+        #     blocks = page.get_text("blocks")
 
-            # Sort blocks top → bottom
-            blocks = sorted(blocks, key=lambda b: (b[1], b[0]))
+        #     # Sort blocks top → bottom
+        #     blocks = sorted(blocks, key=lambda b: (b[1], b[0]))
 
-            page_width = page.rect.width
-            mid_x = page_width / 2
+        #     page_width = page.rect.width
+        #     mid_x = page_width / 2
 
-            left_col = []
-            right_col = []
+        #     left_col = []
+        #     right_col = []
 
-            for b in blocks:
-                x0, y0, x1, y1, text, *_ = b
+        #     for b in blocks:
+        #         x0, y0, x1, y1, text, *_ = b
 
-                if len(text.strip()) < 5:
-                    continue
+        #         if len(text.strip()) < 5:
+        #             continue
 
-                # Split into columns
-                if x0 < mid_x:
-                    left_col.append((y0, text))
-                else:
-                    right_col.append((y0, text))
+        #         # Split into columns
+        #         if x0 < mid_x:
+        #             left_col.append((y0, text))
+        #         else:
+        #             right_col.append((y0, text))
 
-            # Sort each column top → bottom
-            left_col = sorted(left_col, key=lambda x: x[0])
-            right_col = sorted(right_col, key=lambda x: x[0])
+        #     # Sort each column top → bottom
+        #     left_col = sorted(left_col, key=lambda x: x[0])
+        #     right_col = sorted(right_col, key=lambda x: x[0])
 
-            # Merge properly: LEFT first, then RIGHT
-            for _, t in left_col:
-                full_text += t + "\n"
+        #     # Merge properly: LEFT first, then RIGHT
+        #     # Merge both columns and sort by vertical position
+        #     merged_blocks = []
 
-            for _, t in right_col:
-                full_text += t + "\n"
+        #     for y, text in left_col:
+        #         merged_blocks.append((y, text))
 
-        return full_text
+        #     for y, text in right_col:
+        #         merged_blocks.append((y, text))
+
+        #     # Sort ALL blocks top → bottom
+        #     merged_blocks = sorted(merged_blocks, key=lambda x: x[0])
+
+        #     # Now reconstruct text in reading order
+        #     for _, t in merged_blocks:
+        #         full_text += t + "\n"
+        import pymupdf4llm
+
+        text = pymupdf4llm.to_markdown(pdf_path)
+        return text
+        # return full_text
 
     def parse(self, text, regulation_id=1):
-        current_subpart = "General"
         import re
+
+        text = self.normalize_text(text)
+        text = self.remove_table_noise(text)
 
         # ---------------- CLEANING ----------------
         text = re.sub(r'http\S+', '', text)
-
-        # Normalize line breaks
         text = text.replace("\r", "\n")
 
-        lines = text.split("\n")
+        # 🔥 NEW BLOCK-BASED PARSING
+        blocks = self.split_into_rule_blocks(text)
 
         rules = []
 
-        # ✅ Strict rule pattern
-        rule_pattern = re.compile(r'^(CS|AMC\d+|GM\d+)\s+23\.(\d{2,4})\b(.*)')
+        rule_pattern = re.compile(
+            r'^(CS|AMC\d+|GM\d+)\s+23\.(\d{2,4})\b\s*(.*)',
+            re.IGNORECASE
+        )
 
-        current_rule = None
-        current_text = []
+        for block in blocks:
 
-        for line in lines:
-
-            line = line.strip()
-
-            # ---------------- SKIP JUNK ----------------
-            if not line or len(line) < 3:
+            block = block.strip()
+            if len(block) < 10:
                 continue
 
-            # ❌ Table of contents (dots + page numbers)
-            if re.search(r'\.{3,}', line):
-                continue
-            # ❌ Remove page numbers
-            if re.match(r'Page \d+ of \d+', line):
+            match = rule_pattern.match(block)
+
+            if not match:
                 continue
 
-            # ❌ Remove amendment lines
-            if "Amdt" in line and not current_rule:
-                continue
+            rule_type = match.group(1)
+            rule_number = match.group(2)
 
-            # ❌ Remove section headings
-            # if line.isupper() and len(line) < 30:
-            #     continue
-              # ❌ Skip pure reference lines
-            # ❌ Skip reference lines ONLY for CS (not AMC)
-            if current_rule and current_rule["type"] == "CS":
-                if re.match(r'^(23\.\d+)', line):
-                    continue 
-            # ❌ Headers / footers
-            if any(x in line for x in [
-                "AMC & GM to CS-23",
-                "CS-23 — Amendment",
-                "Table of Contents",
-                "ED Decision",
-                "Annex to",
-                "Preamble"
-            ]):
-                continue
+            # Title = first line only
+            first_line = block.split("\n")[0]
+            title = first_line.replace(match.group(0), "").strip()
 
-            # ❌ Subparts / sections
-            if "SUBPART" in line:
-                # ✅ Detect SUBPART
-                subpart_match = re.match(r'SUBPART\s+([A-Z])\s*[-–]?\s*(.*)', line)
+            full_text = block
+            full_text = re.sub(r'Subpart\s+[A-Z].*', '', full_text)
+            current_rule = {
+                "rule_number": rule_number,
+                "type": rule_type,
+                "title": self.clean_text(f"{rule_type} 23.{rule_number}"),
+                "text": "",
+                "subpart": "General",
+                "regulation_id": regulation_id
+            }
 
-                if subpart_match:
-                    current_subpart = f"Subpart {subpart_match.group(1)}"
-                    continue
+            # ✅ Extract references
+            current_rule["references"] = self.extract_references(full_text)
 
-                # Skip appendix
-            if "Appendix" in line:
-                continue
-
-            # ❌ Amendment history lines
-            if re.search(r'Created|Deleted|Amended|NPA', line):
-                continue
-
-            # ❌ Range rules (fake)
-            if re.search(r'CS\s+23\.\d+\s+through\s+CS\s+23\.\d+', line):
-                continue
-
-            # ---------------- RULE DETECTION ----------------
-            match = rule_pattern.match(line)
-
-            if match:
-
-                # Save previous rule
-                if current_rule and current_text:
-                    full_text = "\n".join(current_text)
-#                     references = self.extract_references(full_text)
-# current_rule["references"] = references
-                    # 🔥 ADD THIS LINE (MISSING)
-                    references = self.extract_references(full_text)
-                    current_rule["references"] = references
-
-                    if current_rule["type"] == "CS":
-                        sections = self.extract_sections(full_text)
-
-                        if sections:
-                            current_rule["text"] = sections
-                        else:
-                            current_rule["text"] = full_text.strip()
-                    else:
-                        current_rule["text"] = full_text.strip()
-
-                    rules.append(current_rule)
-
-                rule_type = match.group(1) if match.group(1) else "CS"
-                rule_number = match.group(2)
-
-                # ✅ Clean title (remove trailing dots/pages)
-                title = re.sub(r'\.{3,}.*', '', match.group(3)).strip()
-
-                current_rule = {
-                    "rule_number": rule_number,
-                    "type": rule_type,
-                    "title": self.clean_text(f"{rule_type} 23.{rule_number} {title}"),
-                    "text": "",
-                    "subpart": current_subpart,   # ✅ ADD THIS
-                    "regulation_id": regulation_id
-                }
-
-                current_text = []
-                continue
-
-            # ---------------- TEXT ACCUMULATION ----------------
-            if current_rule:
-                if current_text and not current_text[-1].endswith((".", ":", ")")):
-                    current_text[-1] += " " + line
-                else:
-                    current_text.append(line)
-
-        # Save last rule
-        if current_rule and current_text:
-            full_text = "\n".join(current_text)
-
-            # 🔥 NEW: extract subsections
-            if current_rule["type"] == "CS":
+            # ✅ Handle CS rules
+            if rule_type == "CS":
                 sections = self.extract_sections(full_text)
 
                 if sections:
                     current_rule["text"] = sections
                 else:
-                    current_rule["text"] = full_text.strip()
+                    current_rule["text"] = self.clean_text(full_text)
+
+                # ✅ Store CS master
+                rule_id = f"23.{rule_number}"
+                self.cs_master_rules[rule_id] = current_rule
+
             else:
-                # ✅ AMC & GM should stay RAW TEXT
                 current_rule["text"] = self.clean_text(full_text)
 
             rules.append(current_rule)
+
+        # 🔥 DEBUG (optional)
         for r in rules[:20]:
             print(r['rule_number'])
 
